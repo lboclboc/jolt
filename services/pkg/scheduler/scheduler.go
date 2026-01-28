@@ -31,6 +31,12 @@ type Scheduler interface {
 	// new build requests. Closing unregisters the worker in the scheduler.
 	NewWorker(*Platform, *Platform) (Worker, error)
 
+	// Enable/disable a worker from being scheduled for new tasks
+	SetWorkerEnabled(workerId string, enabled bool) error
+
+	// Check if a worker is disabled
+	IsWorkerDisabled(workerId string) bool
+
 	///////////////////////////////////////////////////////////////////////////
 
 	// Register a new build executor.

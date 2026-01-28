@@ -5,9 +5,41 @@ import (
 	"net/http"
 
 	"github.com/labstack/echo/v4"
+	protocol "github.com/srand/jolt/scheduler/pkg/protocol"
 )
 
 func NewHttpHandler(scheduler Scheduler, r *echo.Echo) {
+	// Worker administration endpoints
+	r.GET("/api/v1/workers", func(c echo.Context) error {
+		resp := scheduler.ListWorkers()
+		// build disabled list
+		disabled := make([]string, 0, len(resp.Workers))
+		for _, w := range resp.Workers {
+			if scheduler.IsWorkerDisabled(w.Id) {
+				disabled = append(disabled, w.Id)
+			}
+		}
+		payload := struct {
+			Workers  []*protocol.ListWorkersResponse_Worker `json:"workers"`
+			Disabled []string                              `json:"disabled"`
+		}{Workers: resp.Workers, Disabled: disabled}
+		return c.JSON(http.StatusOK, payload)
+	})
+	r.POST("/api/v1/workers/:id/enable", func(c echo.Context) error {
+		id := c.Param("id")
+		if err := scheduler.SetWorkerEnabled(id, true); err != nil {
+			return c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+		}
+		return c.JSON(http.StatusOK, &protocol.ListWorkersResponse{})
+	})
+	r.POST("/api/v1/workers/:id/disable", func(c echo.Context) error {
+		id := c.Param("id")
+		if err := scheduler.SetWorkerEnabled(id, false); err != nil {
+			return c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+		}
+		return c.JSON(http.StatusOK, &protocol.ListWorkersResponse{})
+	})
+
 	r.GET("/metrics", func(c echo.Context) error {
 		stats := scheduler.Statistics()
 

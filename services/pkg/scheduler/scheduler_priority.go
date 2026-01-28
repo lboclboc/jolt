@@ -64,10 +64,14 @@ type priorityScheduler struct {
 	workers map[string]Worker
 
 	// Map of workers which are available for scheduling.
+	// Only enabled workers can be enqueued here.
 	availWorkers map[string]Worker
 
 	// Map of assigned task id to worker
 	workerExecutors map[Worker]Executor
+
+	// Set of disabled workers (id -> true)
+	disabledWorkers map[string]bool
 
 	// List of telemtry receivers
 	observers []SchedulerObserver
@@ -89,6 +93,7 @@ func NewPriorityScheduler() *priorityScheduler {
 		workers:         map[string]Worker{},
 		availWorkers:    map[string]Worker{},
 		workerExecutors: map[Worker]Executor{},
+		disabledWorkers: map[string]bool{},
 	}
 }
 
@@ -400,6 +405,10 @@ func (s *priorityScheduler) dequeueWorkerNoLock(worker Worker) {
 
 // Add a worker to the available worker list.
 func (s *priorityScheduler) enqueueWorkerNoLock(worker Worker) {
+	if s.disabledWorkers[worker.Id()] {
+		log.Trace("Worker disabled, not enqueuing:", worker.Id())
+		return
+	}
 	log.Trace("Marking worker as free:", worker.Id())
 	s.availWorkers[worker.Id()] = worker
 }
@@ -484,7 +493,9 @@ func (s *priorityScheduler) NewWorker(platform, taskPlatform *Platform) (Worker,
 
 	s.Lock()
 	s.workers[worker.Id()] = worker
-	s.enqueueWorkerNoLock(worker)
+	if !s.disabledWorkers[worker.Id()] {
+		s.enqueueWorkerNoLock(worker)
+	}
 	s.Unlock()
 
 	// FIXME: Log as single record to avoid interleaving
@@ -701,3 +712,39 @@ func (s *priorityScheduler) RLock() {
 func (s *priorityScheduler) RUnlock() {
 	s.mu.RUnlock()
 }
+
+// Enable/disable a worker by id.
+func (s *priorityScheduler) SetWorkerEnabled(workerId string, enabled bool) error {
+	s.Lock()
+	defer s.Unlock()
+
+	worker, ok := s.workers[workerId]
+	if !ok {
+		return utils.ErrNotFound
+	}
+
+	if !enabled {
+		// mark disabled and remove from available pool
+		s.disabledWorkers[workerId] = true
+		delete(s.availWorkers, workerId)
+		// keep running if busy
+	} else {
+		delete(s.disabledWorkers, workerId)
+		// enqueue if idle (no executor assigned)
+		if s.workerExecutors[worker] == nil {
+			s.enqueueWorkerNoLock(worker)
+		}
+	}
+
+	// trigger reschedule
+	s.Reschedule()
+	return nil
+}
+
+// Returns true if worker is disabled.
+func (s *priorityScheduler) IsWorkerDisabled(workerId string) bool {
+	s.RLock()
+	defer s.RUnlock()
+	return s.disabledWorkers[workerId]
+}
+
